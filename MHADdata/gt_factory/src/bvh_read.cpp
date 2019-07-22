@@ -1,0 +1,305 @@
+/*
+  MHAD_BVH_2_16_KEYPOINTS
+  =======================
+  Author: Bård-Kristian Krohg
+
+  Description:
+  Gives us a file with XYZ locations for 16 joints, which will be used as ground truth 
+  locations for each joint. Keypoints for roll-joints will be interpolated, and their
+  euclidean midpoint will be used as the ground truth location.
+  (NB! this might create some discrepancies in the training data, as the length of each
+  limb might change, or be different on the left/right side of the body.)
+
+  The program structure and bvh loading is modified fromcode found at:
+  https://www.gamedev.net/articles/programming/general-and-gameplay-programming/bvh-file
+  -loading-and-displaying-r3295/
+  by Edin Mujagic.
+
+
+  input:   argv[1]:  BVH file to be parsed
+           argv[2]:  number of samples per second
+
+  Optional input:
+	   argv[3]:  translation matrix so output will be in respect to camera origin
+	   argv[4]:  A single frame number you want to extract the pose from
+
+  output:  a file with xyz locations (in respect to world coordinate system as default)
+ */
+
+
+#include "../include/bvh_read.h"
+#include "util.cpp"
+
+class bvh
+{
+  JOINT* loadJoint(std::istream& stream, JOINT* parent = NULL);
+  void loadHierarchy(std::istream& stream);
+  void loadMotion(std::istream& stream);
+
+public:
+  bvh();
+  ~bvh();
+
+  // loading
+  void load(const std::string& filename);
+
+  /* Loads motion data from a frame into local matrices */
+  void moveTo(unsigned frame);
+
+  const JOINT* getRootJoint() const {return rootJoint;}
+  unsigned getNumFrames() const {return motionData.num_frames;}
+
+private:
+  JOINT* rootJoint;
+  MOTION motionData;
+};
+
+bvh::bvh() {}
+bvh::~bvh() {}
+
+void
+bvh::load(const std::string& filename)
+{
+  std::fstream file;
+  file.open(filename.c_str(), std::ios_base::in);
+
+  if (file.is_open()) {
+    std::string line;
+
+    while (file.good()) {
+
+      file >> line;
+      if (trim(line) == "HIERARCHY")
+        loadHierarchy(file);
+
+    } // wend
+    
+    file.close();
+    
+  }
+}
+
+
+void
+bvh::loadHierarchy(std::istream& stream)
+{
+  std::string tmp;
+
+  while (stream.good()) {
+    stream >> tmp;
+
+    if (trim(tmp) == "ROOT") {
+      std::cout << "loading root" << std::endl;
+      rootJoint = loadJoint(stream);
+    }
+    else if (trim(tmp) == "MOTION") {
+      std::cout << "loading motion" << std::endl;
+      // loadMotion(stream);
+    }
+  } // wend  
+}
+
+
+JOINT*
+bvh::loadJoint(std::istream& stream, JOINT* parent)
+{
+  JOINT* joint = new JOINT;
+  joint->parent = parent;
+
+  // load joint name
+  std::string* name = new std::string;
+  stream >> *name;
+  joint->name = name->c_str();
+
+  std::string tmp;
+
+  // setting local matrix to identity matrix
+  joint->matrix = Eigen::Matrix4d::Identity();
+
+  static int _channel_start = 0;
+  unsigned channel_order_idx = 0;
+
+  while (stream.good()) {
+
+    stream >> tmp;
+    tmp = trim(tmp);
+
+    // loading channels
+    char c = tmp.at(0);
+
+    if (c == 'X' || c == 'Y' || c == 'Z') {
+      if (tmp == "Xposition")
+	joint->channel_order[channel_order_idx++] = Xposition;
+
+      if (tmp == "Yposition")
+	joint->channel_order[channel_order_idx++] = Yposition;
+
+      if (tmp == "Zposition")
+	joint->channel_order[channel_order_idx++] = Zposition;
+
+      
+      if (tmp == "Xrotation")
+	joint->channel_order[channel_order_idx++] = Xrotation;
+
+      if (tmp == "Yrotation")
+	joint->channel_order[channel_order_idx++] = Yrotation;
+
+      if (tmp == "Zrotation")
+	joint->channel_order[channel_order_idx++] = Zrotation;
+    }
+
+    if (tmp == "OFFSET") {
+      stream >> joint->offset.x
+	     >> joint->offset.y
+	     >> joint->offset.z;
+    }
+    else if (tmp == "CHANNELS") {
+      // loading number of channels
+      stream >> joint->num_channels;
+
+      // adding to motion data
+      motionData.num_motion_channels += joint->num_channels;
+
+      // increasing static counter of channel index starting motion section
+      joint->channel_start = _channel_start;
+      _channel_start += joint->num_channels;
+
+      // creating array for channel order specification
+      joint->channel_order = new short[joint->num_channels];      
+    }
+    else if (tmp == "JOINT") {
+      // loading child joint and setting this as parent
+      JOINT* tmp_joint = loadJoint(stream, joint);
+
+      tmp_joint->parent = joint;
+      joint->children.push_back(tmp_joint);
+    }
+    else if (tmp == "End") {
+      // loading 'End Site' joint.
+      stream >> tmp >> tmp; // Site {
+
+      JOINT* tmp_joint = new JOINT;
+
+      tmp_joint->parent = joint;
+      tmp_joint->num_channels = 0;
+      tmp_joint->name = "End Site";
+      joint->children.push_back(tmp_joint);
+
+      stream >> tmp;
+      if (tmp == "OFFSET")
+	stream >> joint->offset.x
+	       >> joint->offset.y
+	       >> joint->offset.z;
+      stream >> tmp;
+    }
+    else if (tmp == "}")
+      return joint;
+  };
+
+
+  std::cout << joint->name << "\n" << joint->matrix << std::endl; 
+}
+
+void
+bvh::loadMotion(std::istream& stream)
+{
+  std::string tmp;
+
+  while (stream.good()) {
+    stream >> tmp;
+
+    if (trim(tmp) == "Frames:") {
+      // loading frame number
+      stream >> motionData.num_frames;
+      std::cout << "Number of Frames: " << motionData.num_frames << std::endl;
+    }
+    else if (trim(tmp) == "Frame") {
+      // loading frame time
+      float frame_time;
+      stream >> tmp >> frame_time;
+
+      int num_frames = motionData.num_frames;
+      int num_channels = motionData.num_motion_channels;
+
+      // creating motion data array
+      motionData.data = new float[num_frames * num_channels];
+
+      // foreach frame and store floats
+      for (int frame = 0; frame < num_frames; frame++) 
+	for (int channel = 0; channel < num_channels; channel++) {
+
+	  // reading float
+	  float x;
+	  std::stringstream ss;
+	  stream >> tmp;
+	  ss << tmp;
+	  ss >> x;
+
+	  // calculating index for storage
+	  int idx = frame * num_channels + channel;
+	  motionData.data[idx] = x;
+	}
+      
+    } // else if "Frame" end
+  } // wend
+
+}
+
+/*
+  Calculates the JOINTs local transformation matrix for a specified
+  frames starting index
+*/
+static void
+moveJoint(JOINT* joint, MOTION* motionData, int frame_start_index)
+{
+  // we'll need the index int the motion data array, where this specific
+  // joints channels start.
+  int start_index = frame_start_index + joint->channel_start;
+
+  // translate identity matrix to this joints parameters
+
+
+  for (int i=0; i < joint->num_channels; i++) {
+    // channel alias
+    const short& channel = joint->channels_order;
+
+    // extract value from motion data
+    float value = motionData->data[start_index + i];
+
+    if (channel & Xposition) {
+      joint->matrix *= Eigen::AngleAxisd(value, Eigen::Vector3d::UnitX());
+    }
+    if (channel & Yposition) {
+      joint->matrix *= Eigen::AngleAxisd(value, Eigen::Vector3d::UnitY());
+    }
+    if (channel & Zposition) {
+      joint->matrix *= Eigen::AngleAxisd(value, Eigen::Vector3d::UnitZ());
+    }
+    
+
+  }
+}
+
+
+int main(int args, char* argv[])
+{
+
+  bvh my_bvh;
+  // Eigen::Matrix4d mat = Eigen::Matrix4d::Random();
+  // std::cout << mat << std::endl;
+  if (args >= 2) {
+    // std::cout << "Opening " << argv[1] << std::endl;
+    my_bvh.load(argv[1]);
+
+    
+
+    
+  } else {
+    std::cout << "Please specify a path to a valid .bvh file: ";
+    std::string s;
+    std::cin >> s;
+    my_bvh.load(s);
+  }
+  printf("some shit\n");
+  return 0;
+}

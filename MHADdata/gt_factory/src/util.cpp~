@@ -1,0 +1,5 @@
+std::string ltrim(std::string s)
+{
+  
+
+}

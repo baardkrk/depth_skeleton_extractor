@@ -1,0 +1,18 @@
+#IncludeRegexLine: ^[ 	]*#[ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/home/baard/master/MHADdata/gt_factory/src/util.cpp
+cctype
+-
+algorithm
+-
+locale
+-
+iostream
+-
+

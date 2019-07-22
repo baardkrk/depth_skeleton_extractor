@@ -1,0 +1,28 @@
+/*
+  BVH SKELETON CLASS
+  ==================
+  Author: Bård-Kristian Krohg
+
+  Description:
+  Creates a Skeleton object with the offsets and segments from a BVH file.
+
+ */
+
+public class Sk_Positions {
+
+public:
+  
+}
+
+
+public class BVH_Skeleton {
+
+private:
+  double offsets[16];
+
+
+public:
+
+  vec3 get_positions(int frame[]);
+
+};
